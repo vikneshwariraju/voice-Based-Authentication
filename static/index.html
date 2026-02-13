@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Voice Authentication</title>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #6a11cb, #2575fc);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      color: #fff;
+    }
+
+    .auth-box {
+      background-color: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      padding: 40px;
+      border-radius: 20px;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+      text-align: center;
+      width: 350px;
+      max-width: 90%;
+    }
+
+    h1 {
+      margin-bottom: 20px;
+      font-size: 1.8rem;
+    }
+
+    button {
+      background-color: #4CAF50;
+      color: white;
+      padding: 12px 24px;
+      font-size: 16px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      margin: 10px 0;
+      width: 100%;
+      transition: background-color 0.3s ease;
+    }
+
+    button:disabled {
+      background-color: #999;
+      cursor: not-allowed;
+    }
+
+    button:hover:not(:disabled) {
+      background-color: #45a049;
+    }
+
+    #result {
+      margin-top: 20px;
+      font-weight: bold;
+      font-size: 18px;
+      white-space: pre-line;
+    }
+
+    canvas {
+      margin-top: 15px;
+      width: 100%;
+      height: 60px;
+      background-color: rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+    }
+  </style>
+
+</head>
+
+<body>
+
+<div class="auth-box">
+  <h1>🎙️ Voice Authentication</h1>
+
+<button id="recordBtn">Start Recording</button> <button id="stopBtn" disabled>Stop & Send</button>
+
+<canvas id="visualizer"></canvas>
+
+  <p id="result">Prediction: ...</p>
+</div>
+
+<script>
+let mediaRecorder, stream, audioChunks = [];
+
+const recordBtn = document.getElementById("recordBtn");
+const stopBtn = document.getElementById("stopBtn");
+const result = document.getElementById("result");
+const canvas = document.getElementById("visualizer");
+const canvasCtx = canvas.getContext("2d");
+
+canvas.width = 320;
+canvas.height = 60;
+
+/* ------------------ AUDIO VISUALIZER ------------------ */
+function visualize(stream) {
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const source = audioCtx.createMediaStreamSource(stream);
+  const analyser = audioCtx.createAnalyser();
+
+  analyser.fftSize = 256;
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+
+  source.connect(analyser);
+
+  function draw() {
+    requestAnimationFrame(draw);
+    analyser.getByteFrequencyData(dataArray);
+
+    canvasCtx.fillStyle = "#ffffff11";
+    canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const barWidth = (canvas.width / bufferLength) * 2.5;
+    let x = 0;
+
+    for (let i = 0; i < bufferLength; i++) {
+      const barHeight = dataArray[i] / 1.5;
+      canvasCtx.fillStyle = "rgba(255,255,255,0.8)";
+      canvasCtx.fillRect(
+        x,
+        canvas.height - barHeight,
+        barWidth,
+        barHeight
+      );
+      x += barWidth + 1;
+    }
+  }
+
+  draw();
+}
+
+/* ------------------ RECORD BUTTON ------------------ */
+recordBtn.onclick = async () => {
+  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+  mediaRecorder = new MediaRecorder(stream);
+  audioChunks = [];
+
+  visualize(stream);
+
+  mediaRecorder.ondataavailable = event => {
+    if (event.data.size > 0) {
+      audioChunks.push(event.data);
+    }
+  };
+
+  mediaRecorder.onstop = async () => {
+    const blob = new Blob(audioChunks, { type: "audio/webm" });
+    const formData = new FormData();
+    formData.append("file", blob, "voice.webm");
+
+    result.style.color = "#fff";
+    result.textContent = "⏳ Analyzing voice...";
+
+    try {
+      const response = await fetch("/authenticate", {
+        method: "POST",
+        body: formData
+      });
+
+      const data = await response.json();
+
+      if (data.error) {
+        result.style.color = "#ff4d4d";
+        result.textContent = "❌ Error: " + data.error;
+      } else {
+        if (data.status === "AUTHENTICATED") {
+          result.style.color = "#00ff88";
+        } else {
+          result.style.color = "#ff4d4d";
+        }
+
+        result.textContent =
+          `User: ${data.user}
+Confidence: ${data.confidence}%
+Status: ${data.status}`;
+      }
+
+    } catch (err) {
+      result.style.color = "#ff4d4d";
+      result.textContent = "❌ Error: " + err.message;
+    }
+
+    stream.getTracks().forEach(track => track.stop());
+    canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+  };
+
+  mediaRecorder.start();
+  recordBtn.disabled = true;
+  stopBtn.disabled = false;
+};
+
+/* ------------------ STOP BUTTON ------------------ */
+stopBtn.onclick = () => {
+  mediaRecorder.stop();
+  recordBtn.disabled = false;
+  stopBtn.disabled = true;
+};
+</script>
+
+</body>
+</html>
